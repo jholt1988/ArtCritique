@@ -1,0 +1,6 @@
+{
+  "name": "ArtCritique VLM - Digital Art & Portfolio Analyzer",
+  "description": "Systematic art evaluation powered by Vision-Language AI. Analyzes Composition, Lighting & Color, Anatomy & Perspective, and Mood & Storytelling to refine digital art and build gallery-ready portfolios.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
