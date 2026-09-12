@@ -37,6 +37,7 @@ import { PortfolioModal } from './components/PortfolioModal';
 import { PortfolioDashboard } from './components/PortfolioDashboard';
 import { PromptSuggestionsPanel } from './components/PromptSuggestionsPanel';
 import { downloadReportFile } from './utils/exportReport';
+import { resolveChain, resolveEditParent } from './utils/versionChain';
 
 type MainViewTab = 'analyzer' | 'comparison' | 'portfolio' | 'dashboard';
 type PillarTab = 'overview' | 'composition' | 'lighting' | 'anatomy' | 'storytelling' | 'chat';
@@ -51,6 +52,10 @@ export default function App() {
   // Currently loaded artwork & critique
   const [currentImage, setCurrentImage] = useState<string | null>(null);
   const [currentCritique, setCurrentCritique] = useState<ArtCritique | null>(null);
+  // Portfolio row id the loaded artwork came from (null for fresh uploads /
+  // unsaved samples). Needed so a generative edit links to the right version
+  // chain — the critique id alone can never identify a portfolio row.
+  const [currentArtworkId, setCurrentArtworkId] = useState<string | null>(null);
   const [selectedHotspot, setSelectedHotspot] = useState<HotspotAnnotation | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isReimagining, setIsReimagining] = useState(false);
@@ -75,7 +80,7 @@ export default function App() {
   useEffect(() => {
     async function loadStorage() {
       try {
-        const savedPortfolio = await localforage.getItem(STORAGE_KEY);
+        const savedPortfolio = (await localforage.getItem(STORAGE_KEY)) as PortfolioArtwork[] | null;
         if (savedPortfolio) {
           setPortfolio(savedPortfolio);
         } else {
@@ -90,7 +95,7 @@ export default function App() {
           })));
         }
 
-        const savedCollections = await localforage.getItem(COLLECTIONS_KEY);
+        const savedCollections = (await localforage.getItem(COLLECTIONS_KEY)) as PortfolioCollection[] | null;
         if (savedCollections) {
           setCollections(savedCollections);
         }
@@ -137,9 +142,16 @@ export default function App() {
   };
 
   const handleCritiqueCollection = async (collectionId: string) => {
-    setIsLoading(true);
+    // Guard BEFORE flipping any loading state: an early return after the setter
+    // escapes the try/finally below and would freeze the global spinner
+    // forever (see tests/loadingGuards.test.mts).
     const collection = collections.find(c => c.id === collectionId);
-    if (!collection) return;
+    if (!collection) {
+      setErrorMessage('Collection no longer exists.');
+      return;
+    }
+
+    setIsLoading(true);
 
     try {
       const items = portfolio.filter(p => collection.itemIds.includes(p.id));
@@ -175,8 +187,12 @@ export default function App() {
   }, []);
 
   const handleSelectPreset = (sample: SampleArtwork) => {
+    const seedId = 'seed_' + sample.id;
     setCurrentImage(sample.imageData);
     setCurrentCritique(sample.critiquePreset);
+    // Link to the seeded portfolio row when it exists, so a generative edit on
+    // a sample continues that chain; null otherwise (fresh upload behavior).
+    setCurrentArtworkId(portfolio.some((p) => p.id === seedId) ? seedId : null);
     setActivePillarTab('overview');
     setSelectedHotspot(null);
     setErrorMessage(null);
@@ -241,18 +257,27 @@ export default function App() {
       setActivePillarTab('overview');
       setSelectedHotspot(null);
       
-      const newPortfolioItem = {
+      // Link the edit to the loaded artwork's version chain. The parent must be
+      // a PORTFOLIO ROW id — the critique id alone can never identify one.
+      const parentRowId = resolveEditParent(portfolio, currentArtworkId);
+      const chain = resolveChain(portfolio, parentRowId, newCritiqueResult.artworkTitle);
+
+      const newPortfolioItem: PortfolioArtwork = {
         id: 'artwork_' + Date.now(),
         title: newCritiqueResult.artworkTitle,
         imageData: reimagedUrl,
         critique: newCritiqueResult,
         createdAt: Date.now(),
         tags: [newCritiqueResult.artistStyle, 'Generative Edit'],
-        version: (portfolio.find(p => p.id === currentCritique.id)?.version || 1) + 1,
-        parentArtworkId: currentCritique.id
+        version: chain.version,
+        parentArtworkId: chain.parentArtworkId ?? undefined,
       };
-      
+
       setPortfolio((prev) => [newPortfolioItem, ...prev]);
+      // Invariant: the loaded identity becomes the NEWEST row created, so a
+      // subsequent edit extends the chain (v2 -> v3 -> v4) instead of
+      // re-deriving from the same root and stacking v2, v2, v2.
+      setCurrentArtworkId(newPortfolioItem.id);
       
     } catch (err: any) {
       console.error('Reimagine request failed:', err);
@@ -274,10 +299,12 @@ export default function App() {
     targetContext: TargetContext;
     intendedMood: string;
     artistQuestions: string;
+    artworkId?: string | null;
   }) => {
     setIsLoading(true);
     setErrorMessage(null);
     setCurrentImage(payload.imageData);
+    setCurrentArtworkId(payload.artworkId ?? null);
 
     try {
       const response = await fetchApi('/api/critique', {
@@ -304,7 +331,9 @@ export default function App() {
       setActivePillarTab('overview');
       setSelectedHotspot(null);
 
-      // Save to Portfolio Vault
+      // Save to Portfolio Vault — continue the version chain if this
+      // re-analysis belongs to an existing artwork, else start at v1.
+      const chain = resolveChain(portfolio, payload.artworkId ?? null, critiqueResult.artworkTitle);
       const newPortfolioItem: PortfolioArtwork = {
         id: 'artwork_' + Date.now(),
         title: critiqueResult.artworkTitle,
@@ -312,10 +341,14 @@ export default function App() {
         critique: critiqueResult,
         createdAt: Date.now(),
         tags: [payload.artistStyle, payload.targetContext.split(' ')[0]],
-        version: 1,
+        version: chain.version,
+        parentArtworkId: chain.parentArtworkId ?? undefined,
       };
 
       setPortfolio((prev) => [newPortfolioItem, ...prev]);
+      // Same identity invariant as handleGenerativeEdit: the loaded artwork is
+      // now the newest row created for it.
+      setCurrentArtworkId(newPortfolioItem.id);
 
       // Fire celebratory confetti if high score
       if (critiqueResult.overallScore >= 8.5) {
@@ -346,6 +379,7 @@ export default function App() {
   const handleSelectFromPortfolio = (item: PortfolioArtwork) => {
     setCurrentImage(item.imageData);
     setCurrentCritique(item.critique);
+    setCurrentArtworkId(item.id);
     setActivePillarTab('overview');
     setSelectedHotspot(null);
     setActiveView('analyzer');
@@ -366,6 +400,7 @@ export default function App() {
   const handleNewCritique = () => {
     setCurrentImage(null);
     setCurrentCritique(null);
+    setCurrentArtworkId(null);
     setSelectedHotspot(null);
     setErrorMessage(null);
     setActiveView('analyzer');

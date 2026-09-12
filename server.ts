@@ -4,6 +4,7 @@ import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
 import * as fs from 'fs';
+import { normalizeHotspots } from './hotspotNormalize.mts';
 
 dotenv.config();
 
@@ -70,7 +71,9 @@ async function smartGenerateContent(req: express.Request, requestParams: any) {
       combinedPrompt += "\n\nOutput only the raw JSON, do not include any other text, markdown, or commentary.";
     }
     
-    const runpodPayload = { 
+    const runpodPayload: {
+      input: { prompt: string; max_tokens: number; max_new_tokens: number; images?: string[]; image?: string };
+    } = { 
       input: { 
         prompt: combinedPrompt.trim(),
         max_tokens: 4000,
@@ -227,7 +230,7 @@ async function smartGenerateContent(req: express.Request, requestParams: any) {
     let userMessage;
     if (isV1OpenAI && images.length > 0) {
       // OpenAI Vision format
-      const contentArr = [{ type: "text", text: userPrompt.trim() }];
+      const contentArr: Array<{ type: string } & Record<string, any>> = [{ type: "text", text: userPrompt.trim() }];
       for (const img of images) {
          contentArr.push({ type: "image_url", image_url: { url: img } });
       }
@@ -244,7 +247,7 @@ async function smartGenerateContent(req: express.Request, requestParams: any) {
 
     const modelName = req?.headers['x-custom-model-name'] || (isV1OpenAI ? 'gpt-4o' : 'llama3.2-vision');
 
-    let payload = {};
+    let payload: Record<string, any> = {};
     if (isV1OpenAI) {
       payload = {
         model: modelName,
@@ -337,7 +340,7 @@ You MUST rigorously evaluate the artwork across the four fundamental artistic pi
 3. Anatomy & Perspective: Checking human/creature/figure proportions, bone landmarks, joint articulation, facial structure planes, foreshortening, and accuracy of perspective grids (1/2/3-point perspective, vanishing points, horizon level consistency, background line convergence).
 4. Mood & Storytelling: Assessing whether the artwork effectively communicates the intended emotion, narrative intrigue, atmosphere, thematic resonance, and client/gallery commercial readiness.
 
-Provide 3 to 5 precise Hotspot Annotations with estimated coordinates (x: 0 to 100%, y: 0 to 100%) indicating exact regions on the canvas where a specific issue, strength, or critical refinement is located.
+Provide 3 to 5 precise Hotspot Annotations with estimated coordinates (x: 0 to 100%, y: 0 to 100%) indicating exact regions on the canvas where a specific issue, strength, or critical refinement is located. Each annotation MUST include: pillar (one of 'composition', 'lighting', 'anatomy', 'storytelling') — which pillar it belongs to; a short title; the issue/description of what is happening at that spot; a concrete recommendation or fix; and severity (one of 'critical', 'improvement', 'strength').
 Also extract a 5-color dominant palette representing the work's color script.
 Deliver candid, actionable, inspiring, and technically precise feedback. Avoid fluff or generic praise. Provide exact digital painting techniques and brushwork/value adjustments the artist can execute immediately.`;
 
@@ -422,13 +425,15 @@ Provide structured JSON adhering precisely to the required schema.`;
               items: {
                 type: Type.OBJECT,
                 properties: {
-                  x: { type: Type.NUMBER },
-                  y: { type: Type.NUMBER },
-                  title: { type: Type.STRING },
-                  description: { type: Type.STRING },
-                  type: { type: Type.STRING, enum: ['issue', 'strength', 'refinement'] },
+                  x: { type: Type.NUMBER, description: '0 to 100 (percent from left edge)' },
+                  y: { type: Type.NUMBER, description: '0 to 100 (percent from top edge)' },
+                  pillar: { type: Type.STRING, enum: ['composition', 'lighting', 'anatomy', 'storytelling'], description: 'Which of the four pillars this annotation belongs to' },
+                  title: { type: Type.STRING, description: 'Short label for the annotated region' },
+                  issue: { type: Type.STRING, description: 'What is happening at this spot (problem or strength)' },
+                  recommendation: { type: Type.STRING, description: 'Concrete fix or what to keep' },
+                  severity: { type: Type.STRING, enum: ['critical', 'improvement', 'strength'] },
                 },
-                required: ['x', 'y', 'title', 'description', 'type'],
+                required: ['x', 'y', 'pillar', 'title', 'issue', 'severity'],
               },
             },
             colorPalette: {
@@ -489,6 +494,12 @@ Provide structured JSON adhering precisely to the required schema.`;
 
     critiqueJson.id = 'critique_' + Date.now();
     critiqueJson.timestamp = Date.now();
+
+    // Normalize hotspots onto the frontend contract (HotspotAnnotation):
+    // maps legacy {description,type} -> {issue,recommendation,severity}, infers
+    // pillar, assigns stable ids, clamps coordinates. Weak/custom models that
+    // ignore the responseSchema still produce renderable annotations.
+    critiqueJson.hotspots = normalizeHotspots(critiqueJson.hotspots);
     critiqueJson.artistStyle = artistStyle;
     critiqueJson.targetContext = targetContext;
     critiqueJson.intendedMood = intendedMood;
