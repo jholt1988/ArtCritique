@@ -930,9 +930,19 @@ async function startServer() {
   } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
-    app.get('*', (req, res) => res.sendFile(path.join(distPath, 'index.html')));
+    // SPA catchall: any non-API route (unknown paths, deep client-side routes
+    // like /portfolio or /comparison) falls through to index.html so the
+    // client router can take over. Uses an explicit regex so API 404s (JSON
+    // responses from their handlers) don't collide with the catchall, and
+    // unknown API routes return JSON not the SPA shell.
+    app.get(/^(?!\/api\/).*/, (req, res, next) => {
+        if (req.accepts('html')) {
+            return res.sendFile(path.join(distPath, 'index.html'));
+        }
+        return res.status(404).json({ error: 'Not found' });
+    });
   }
-  
+
   app.listen(PORT, '0.0.0.0', () => console.log(`ArtCritique VLM Server active on port ${PORT}`));
 }
 
