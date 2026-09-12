@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
+import type { Variants } from 'motion/react';
+import { selectDisplayHotspots } from '../utils/pillarHotspotDisplay';
 import {
   Compass,
   SunMedium,
@@ -117,8 +119,13 @@ export const PillarCritiqueCard: React.FC<PillarCritiqueCardProps> = ({
 
   const config = getPillarConfig();
   const Icon = config.icon;
+  // Global "hot list" semantics (confirmed product decision):
+  //   OFF -> this pillar's annotations, all severities
+  //   ON  -> ALL critical annotations across the whole artwork, each labeled
+  //          with its pillar (the card doubles as the cross-pillar triage view)
+  const selection = selectDisplayHotspots(hotspots, pillarKey, showAllHighPriority);
+  const { items: displayedHotspots } = selection;
   const baseHotspots = hotspots.filter((h) => h.pillar === pillarKey);
-  const displayedHotspots = showAllHighPriority ? hotspots.filter(h => h.severity === 'critical') : baseHotspots;
 
   const getScoreBadge = (score: number) => {
     if (score >= 8.5) return 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30';
@@ -136,12 +143,12 @@ export const PillarCritiqueCard: React.FC<PillarCritiqueCardProps> = ({
     },
   };
 
-  const itemVariants = {
+  const itemVariants: Variants = {
     hidden: { opacity: 0, y: 15 },
-    show: { 
-      opacity: 1, 
-      y: 0, 
-      transition: { duration: 0.4, ease: "easeOut" } 
+    show: {
+      opacity: 1,
+      y: 0,
+      transition: { duration: 0.4, ease: "easeOut" }
     },
   };
 
@@ -393,7 +400,9 @@ export const PillarCritiqueCard: React.FC<PillarCritiqueCardProps> = ({
             <div className="flex items-center gap-2">
               <Crosshair className="w-4 h-4 text-rose-400" />
               <h3 className="text-xs font-bold uppercase tracking-wider text-stone-200">
-                Visual Canvas Annotations ({displayedHotspots.length})
+                {selection.isGlobal
+                  ? <>High-Priority Annotations — All Pillars ({displayedHotspots.length})</>
+                  : <>Visual Canvas Annotations ({displayedHotspots.length})</>}
               </h3>
             </div>
             <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
@@ -415,7 +424,7 @@ export const PillarCritiqueCard: React.FC<PillarCritiqueCardProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {displayedHotspots.length === 0 ? (
               <div className="col-span-full p-4 text-center text-stone-500 text-xs italic">
-                No high-priority annotations found.
+                {selection.emptyMessage}
               </div>
             ) : displayedHotspots.map((hs) => (
               <div

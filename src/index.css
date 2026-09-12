@@ -33,3 +33,15 @@
   background: rgba(168, 162, 158, 0.6);
 }
 
+/* .no-scrollbar — used by 3 components (App.tsx tab strip, MentorChat prompt
+   chips, PortfolioModal tag filters) but previously never defined, so those
+   scroll areas fell back to the browser default scrollbar. This restores the
+   intended "hide the chrome but keep scrolling" behavior. */
+.no-scrollbar {
+  -ms-overflow-style: none;      /* IE / legacy Edge */
+  scrollbar-width: none;         /* Firefox */
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;   /* WebKit / Blink */
+}
+

@@ -18,14 +18,34 @@ export const getProviderHeaders = () => {
   return headers;
 };
 
-export const fetchApi = async (url: string, options: RequestInit = {}) => {
+export const DEFAULT_TIMEOUT_MS = 120_000;
+
+export const fetchApi = async (
+  url: string,
+  options: RequestInit & { timeoutMs?: number } = {},
+) => {
+  const { timeoutMs, ...rest } = options;
   const headers = {
+    'Content-Type': 'application/json',
     ...getProviderHeaders(),
-    ...(options.headers || {}),
+    ...(rest.headers as Record<string, string> | undefined),
   };
 
-  return fetch(url, {
-    ...options,
-    headers,
-  });
+  const timeout = timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    return await fetch(url, {
+      ...rest,
+      headers,
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (controller.signal.aborted) {
+      throw new Error(`Request to ${url} timed out after ${timeout} ms — the AI backend may be slow or unreachable.`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 };
